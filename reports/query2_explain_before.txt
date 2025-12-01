@@ -1,0 +1,30 @@
+ QUERY PLAN                                                                      
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Sort  (cost=3568.70..3568.75 rows=18 width=78) (actual time=99.616..99.646 rows=32 loops=1)
+   Sort Key: (rank() OVER (?))
+   Sort Method: quicksort  Memory: 28kB
+   ->  WindowAgg  (cost=3567.74..3568.33 rows=18 width=78) (actual time=99.481..99.514 rows=32 loops=1)
+         ->  Sort  (cost=3567.74..3567.79 rows=18 width=70) (actual time=99.375..99.393 rows=32 loops=1)
+               Sort Key: (round((((factor_agg.fatal_collisions)::numeric / (NULLIF(factor_agg.factor_collision_count, 0))::numeric) * '100'::numeric), 2)) DESC
+               Sort Method: quicksort  Memory: 27kB
+               ->  Subquery Scan on factor_agg  (cost=3566.26..3567.37 rows=18 width=70) (actual time=99.219..99.253 rows=32 loops=1)
+                     ->  HashAggregate  (cost=3566.26..3566.92 rows=18 width=38) (actual time=99.100..99.122 rows=32 loops=1)
+                           Group Key: f.factor_desc
+                           Filter: (count(*) >= 50)
+                           Batches: 1  Memory Usage: 24kB
+                           Rows Removed by Filter: 21
+                           ->  Hash Join  (cost=2190.19..3120.44 rows=44582 width=26) (actual time=63.255..90.828 rows=44582 loops=1)
+                                 Hash Cond: (cf.collision_id = c.collision_id)
+                                 ->  Hash Join  (cost=2.19..815.40 rows=44582 width=30) (actual time=0.140..16.839 rows=44582 loops=1)
+                                       Hash Cond: (cf.factor_id = f.factor_id)
+                                       ->  Seq Scan on collision_factors cf  (cost=0.00..686.82 rows=44582 width=12) (actual time=0.026..3.333 rows=44582 loops=1)
+                                       ->  Hash  (cost=1.53..1.53 rows=53 width=26) (actual time=0.054..0.054 rows=53 loops=1)
+                                             Buckets: 1024  Batches: 1  Memory Usage: 12kB
+                                             ->  Seq Scan on factors f  (cost=0.00..1.53 rows=53 width=26) (actual time=0.005..0.010 rows=53 loops=1)
+                                                   Filter: (factor_desc IS NOT NULL)
+                                 ->  Hash  (cost=1563.00..1563.00 rows=50000 width=12) (actual time=62.675..62.675 rows=50000 loops=1)
+                                       Buckets: 65536  Batches: 1  Memory Usage: 2856kB
+                                       ->  Seq Scan on collisions c  (cost=0.00..1563.00 rows=50000 width=12) (actual time=0.112..50.785 rows=50000 loops=1)
+ Planning Time: 4.075 ms
+ Execution Time: 100.333 ms
+(27 rows)
