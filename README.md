@@ -130,3 +130,77 @@ Video demonstrates:
 
 ## Phase 1 Complete
 This repository includes all deliverables required for Phase 1 (OLTP).
+
+
+
+
+# Vehicle Crash Analytics (Phase 2 — OLAP Analytical Layer)
+
+This phase extends the OLTP database into an analytical layer.  
+It includes: advanced SQL analytical queries, performance tuning using EXPLAIN ANALYZE, indexing strategies, and an optional OLAP star schema with dbt-based ETL modeling.
+
+------------------------------------------------------------
+
+## Repository Additions for Phase 2
+database_project/
+├── sql/
+│   └── advanced_queries.sql
+│
+├── reports/
+│   ├── performance_tuning.md
+│   ├── dimensional_model_phase2.md
+│   └── star_schema.png
+│
+└── screenshots/
+    ├── q1_output.png
+    ├── q2_output.png
+    ├── q3_output.png
+    ├── explain_before.png
+    ├── explain_after.png
+    └── star_schema.png
+
+------------------------------------------------------------
+
+## 1. Advanced Analytical Queries
+
+Three complex analytical SQL queries were created to answer meaningful business questions about NYC motor vehicle collisions.
+
+Queries include:
+- Multi-table joins  
+- Aggregations  
+- Subqueries / CTEs  
+- Window functions  
+
+All analytical queries are located in:
+
+
+Screenshots of executed queries are included in `/screenshots/`.
+
+------------------------------------------------------------
+
+## 2. Query Optimization & Performance Tuning
+
+Query 2 — **Contributing Factors Ranked by Fatality Rate** — was selected as the most complex analytical query for performance tuning.
+
+### Before Indexing:
+- Execution Time: **100.333 ms**
+- PostgreSQL performed full sequential scans on:
+  - `collision_factors` (~44k rows)
+  - `collisions` (~50k rows)
+- Joins had **no supporting indexes**, causing high computational cost
+
+### Indexing Strategy:
+Indexes were added to improve join performance and reduce full-table scans:
+
+```sql
+CREATE INDEX idx_collision_factors_factor
+    ON collision_factors (factor_id);
+
+CREATE INDEX idx_collision_factors_collision
+    ON collision_factors (collision_id);
+
+CREATE INDEX idx_collisions_date_borough
+    ON collisions (crash_date, borough_id);
+
+
+
