@@ -12,13 +12,13 @@ services:
     ports:
       - "5433:5432"
     volumes:
-      - ./schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+      - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d collisions"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 15
 
   ingest:
     build: .
@@ -28,8 +28,8 @@ services:
         condition: service_healthy
     environment:
       DB_URL: postgresql+psycopg2://postgres:postgres@db:5432/collisions
-    command: >
-      bash -lc "python ingest_data.py"
+      CSV_FILE: motor_vehicle_collisions_2023_2024.csv
+    command: ["python", "ingest_data.py"]
     volumes:
       - .:/app
     restart: "no"
@@ -45,6 +45,7 @@ services:
       - "8501:8501"
     volumes:
       - .:/app
+    command: streamlit run app.py --server.address=0.0.0.0 --server.port=8501
 
 volumes:
   postgres_data:
