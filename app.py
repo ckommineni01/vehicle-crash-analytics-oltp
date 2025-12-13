@@ -32,13 +32,25 @@ def run_query(sql, params=None):
     with eng.connect() as conn:
         return pd.read_sql(text(sql), conn, params=params or {})
 
+# ---- Quick DB test (optional but very useful) ----
+eng = get_engine()
+if eng is None:
+    st.error("DB_URL not found. Add it in Streamlit Secrets as DB_URL = \"postgresql://...\"")
+else:
+    try:
+        test_df = run_query("SELECT COUNT(*) AS n FROM public.collisions;")
+        if not test_df.empty:
+            st.success(f"✅ DB connected. Rows in public.collisions = {int(test_df['n'].iloc[0])}")
+    except Exception as e:
+        st.error(f"❌ DB connection failed: {e}")
 
 st.sidebar.header("Filters")
 end_date = st.sidebar.date_input("End date", value=date.today())
 start_date = st.sidebar.date_input("Start date", value=end_date - timedelta(days=30))
+
 borough_list_sql = """
 SELECT DISTINCT borough
-FROM collisions
+FROM public.collisions
 WHERE borough IS NOT NULL AND borough <> ''
 ORDER BY borough;
 """
@@ -68,7 +80,7 @@ SELECT
   COUNT(*) AS total_crashes,
   COALESCE(SUM(number_of_persons_injured), 0) AS total_injured,
   COALESCE(SUM(number_of_persons_killed), 0) AS total_killed
-FROM collisions
+FROM public.collisions
 WHERE crash_date BETWEEN :start_date AND :end_date
   AND (:borough = 'All' OR borough = :borough);
 """
@@ -82,7 +94,7 @@ SELECT
   COALESCE(SUM(number_of_pedestrians_injured), 0) AS pedestrians_injured,
   COALESCE(SUM(number_of_cyclist_injured), 0) AS cyclists_injured,
   COALESCE(SUM(number_of_motorist_injured), 0) AS motorists_injured
-FROM collisions
+FROM public.collisions
 WHERE crash_date BETWEEN :start_date AND :end_date
   AND (:borough = 'All' OR borough = :borough)
 GROUP BY day
@@ -93,7 +105,7 @@ BY_BOROUGH_SQL = """
 SELECT
   COALESCE(NULLIF(borough,''), 'UNKNOWN') AS borough,
   COUNT(*) AS crashes
-FROM collisions
+FROM public.collisions
 WHERE crash_date BETWEEN :start_date AND :end_date
 GROUP BY COALESCE(NULLIF(borough,''), 'UNKNOWN')
 ORDER BY crashes DESC;
@@ -103,7 +115,7 @@ TOP_FACTORS_SQL = """
 SELECT factor, COUNT(*) AS crashes
 FROM (
   SELECT contributing_factor_vehicle_1 AS factor
-  FROM collisions
+  FROM public.collisions
   WHERE crash_date BETWEEN :start_date AND :end_date
     AND (:borough = 'All' OR borough = :borough)
     AND contributing_factor_vehicle_1 IS NOT NULL
@@ -112,7 +124,7 @@ FROM (
 
   UNION ALL
   SELECT contributing_factor_vehicle_2 AS factor
-  FROM collisions
+  FROM public.collisions
   WHERE crash_date BETWEEN :start_date AND :end_date
     AND (:borough = 'All' OR borough = :borough)
     AND contributing_factor_vehicle_2 IS NOT NULL
@@ -133,12 +145,13 @@ SELECT
   contributing_factor_vehicle_1, contributing_factor_vehicle_2,
   vehicle_type_code1, vehicle_type_code2,
   collision_id
-FROM collisions
+FROM public.collisions
 WHERE crash_date BETWEEN :start_date AND :end_date
   AND (:borough = 'All' OR borough = :borough)
 ORDER BY crash_date DESC, crash_time DESC
 LIMIT 500;
 """
+
 tab1, tab2, tab3 = st.tabs(["📌 Overview", "📈 Trends", "📋 Data"])
 
 with tab1:
@@ -146,7 +159,7 @@ with tab1:
     kpi = run_query(KPI_SQL, params)
 
     if kpi.empty:
-        st.error("No data returned. Check DB connection / table name (collisions).")
+        st.error("No data returned. Check DB connection / table name (public.collisions).")
     else:
         c1, c2, c3 = st.columns(3)
         c1.metric("Total Crashes", int(kpi["total_crashes"].iloc[0]))
