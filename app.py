@@ -3,60 +3,81 @@ import streamlit as st
 import pandas as pd
 from datetime import date, timedelta
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import SQLAlchemyError
 import plotly.express as px
 
-st.set_page_config(page_title="NYC Crash Analytics", page_icon="🚗", layout="wide")
-st.title("🚗 NYC Vehicle Crash Analytics")
-st.caption("Phase 3 Streamlit Dashboard — interactive filters + charts + table")
+# ---------------- PAGE CONFIG ----------------
+st.set_page_config(
+    page_title="NYC Vehicle Crash Analytics",
+    page_icon="🚗",
+    layout="wide"
+)
 
+st.title("🚗 NYC Vehicle Crash Analytics")
+st.caption("Phase 3 Streamlit Dashboard — Neon PostgreSQL + Streamlit Cloud")
+
+# ---------------- DATABASE ----------------
 @st.cache_resource
 def get_engine():
-    # Use Streamlit Cloud Secrets if available, else env var
     db_url = None
-    try:
-        db_url = st.secrets.get("DB_URL")
-    except Exception:
-        pass
+
+    # 1️⃣ Streamlit Cloud secrets
+    if "DB_URL" in st.secrets:
+        db_url = st.secrets["DB_URL"]
+
+    # 2️⃣ Local fallback
     if not db_url:
         db_url = os.getenv("DB_URL")
 
     if not db_url:
-        return None
-    return create_engine(db_url)
+        st.error(
+            "❌ DB_URL not found.\n\n"
+            "Add it in **Streamlit → App Settings → Secrets** as:\n"
+            "`DB_URL = 'postgresql://...'`"
+        )
+        st.stop()
+
+    try:
+        engine = create_engine(
+            db_url,
+            pool_pre_ping=True,
+            connect_args={"sslmode": "require"},
+        )
+        # test connection
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return engine
+
+    except SQLAlchemyError as e:
+        st.error("❌ Database connection failed")
+        st.code(str(e))
+        st.stop()
+
 
 @st.cache_data(ttl=300)
 def run_query(sql, params=None):
-    eng = get_engine()
-    if eng is None:
-        return pd.DataFrame()
-    with eng.connect() as conn:
+    engine = get_engine()
+    with engine.connect() as conn:
         return pd.read_sql(text(sql), conn, params=params or {})
 
-# ---- Quick DB test (optional but very useful) ----
-eng = get_engine()
-if eng is None:
-    st.error("DB_URL not found. Add it in Streamlit Secrets as DB_URL = \"postgresql://...\"")
-else:
-    try:
-        test_df = run_query("SELECT COUNT(*) AS n FROM public.collisions;")
-        if not test_df.empty:
-            st.success(f"✅ DB connected. Rows in public.collisions = {int(test_df['n'].iloc[0])}")
-    except Exception as e:
-        st.error(f"❌ DB connection failed: {e}")
 
-st.sidebar.header("Filters")
+# ---------------- SIDEBAR FILTERS ----------------
+st.sidebar.header("🔎 Filters")
+
 end_date = st.sidebar.date_input("End date", value=date.today())
-start_date = st.sidebar.date_input("Start date", value=end_date - timedelta(days=30))
+start_date = st.sidebar.date_input(
+    "Start date", value=end_date - timedelta(days=30)
+)
 
-borough_list_sql = """
-SELECT DISTINCT borough
-FROM public.collisions
-WHERE borough IS NOT NULL AND borough <> ''
-ORDER BY borough;
-"""
-boroughs_df = run_query(borough_list_sql)
-boroughs = ["All"] + (boroughs_df["borough"].tolist() if not boroughs_df.empty else [])
+# Borough list
+boroughs_df = run_query("""
+    SELECT DISTINCT borough
+    FROM public.collisions
+    WHERE borough IS NOT NULL AND borough <> ''
+    ORDER BY borough;
+""")
 
+boroughs = ["All"] + boroughs_df["borough"].tolist()
 borough = st.sidebar.selectbox("Borough", boroughs)
 
 metric = st.sidebar.selectbox(
@@ -71,10 +92,15 @@ metric = st.sidebar.selectbox(
     ],
 )
 
-top_n = st.sidebar.slider("Top N", min_value=5, max_value=20, value=10)
+top_n = st.sidebar.slider("Top N", 5, 20, 10)
 
-params = {"start_date": start_date, "end_date": end_date, "borough": borough}
+params = {
+    "start_date": start_date,
+    "end_date": end_date,
+    "borough": borough,
+}
 
+# ---------------- SQL QUERIES ----------------
 KPI_SQL = """
 SELECT
   COUNT(*) AS total_crashes,
@@ -121,15 +147,6 @@ FROM (
     AND contributing_factor_vehicle_1 IS NOT NULL
     AND contributing_factor_vehicle_1 <> ''
     AND contributing_factor_vehicle_1 <> 'Unspecified'
-
-  UNION ALL
-  SELECT contributing_factor_vehicle_2 AS factor
-  FROM public.collisions
-  WHERE crash_date BETWEEN :start_date AND :end_date
-    AND (:borough = 'All' OR borough = :borough)
-    AND contributing_factor_vehicle_2 IS NOT NULL
-    AND contributing_factor_vehicle_2 <> ''
-    AND contributing_factor_vehicle_2 <> 'Unspecified'
 ) t
 GROUP BY factor
 ORDER BY crashes DESC
@@ -141,9 +158,10 @@ SELECT
   crash_date, crash_time, borough, zip_code,
   on_street_name, cross_street_name, off_street_name,
   number_of_persons_injured, number_of_persons_killed,
-  number_of_pedestrians_injured, number_of_cyclist_injured, number_of_motorist_injured,
-  contributing_factor_vehicle_1, contributing_factor_vehicle_2,
-  vehicle_type_code1, vehicle_type_code2,
+  number_of_pedestrians_injured, number_of_cyclist_injured,
+  number_of_motorist_injured,
+  contributing_factor_vehicle_1,
+  vehicle_type_code1,
   collision_id
 FROM public.collisions
 WHERE crash_date BETWEEN :start_date AND :end_date
@@ -152,33 +170,31 @@ ORDER BY crash_date DESC, crash_time DESC
 LIMIT 500;
 """
 
+# ---------------- UI TABS ----------------
 tab1, tab2, tab3 = st.tabs(["📌 Overview", "📈 Trends", "📋 Data"])
 
 with tab1:
     st.subheader("Key Metrics")
     kpi = run_query(KPI_SQL, params)
 
-    if kpi.empty:
-        st.error("No data returned. Check DB connection / table name (public.collisions).")
-    else:
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Total Crashes", int(kpi["total_crashes"].iloc[0]))
-        c2.metric("Total Injured", int(kpi["total_injured"].iloc[0]))
-        c3.metric("Total Killed", int(kpi["total_killed"].iloc[0]))
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total Crashes", int(kpi.iloc[0]["total_crashes"]))
+    c2.metric("Total Injured", int(kpi.iloc[0]["total_injured"]))
+    c3.metric("Total Killed", int(kpi.iloc[0]["total_killed"]))
 
-    st.subheader("Crashes by Borough (selected date range)")
-    by_b = run_query(BY_BOROUGH_SQL, {"start_date": start_date, "end_date": end_date})
-    if not by_b.empty:
-        fig_b = px.bar(by_b, x="borough", y="crashes")
-        st.plotly_chart(fig_b, use_container_width=True)
+    st.subheader("Crashes by Borough")
+    by_b = run_query(BY_BOROUGH_SQL, params)
+    st.plotly_chart(
+        px.bar(by_b, x="borough", y="crashes"),
+        use_container_width=True
+    )
 
-    st.subheader(f"Top {top_n} Contributing Factors (selected filters)")
+    st.subheader(f"Top {top_n} Contributing Factors")
     factors = run_query(TOP_FACTORS_SQL, {**params, "top_n": top_n})
-    if not factors.empty:
-        fig_f = px.bar(factors, x="crashes", y="factor", orientation="h")
-        st.plotly_chart(fig_f, use_container_width=True)
-    else:
-        st.info("No contributing factor data for the selected filters.")
+    st.plotly_chart(
+        px.bar(factors, x="crashes", y="factor", orientation="h"),
+        use_container_width=True
+    )
 
 with tab2:
     st.subheader("Trend Over Time")
@@ -192,23 +208,23 @@ with tab2:
         "Cyclists Injured": "cyclists_injured",
         "Motorists Injured": "motorists_injured",
     }
-    ycol = metric_map[metric]
 
-    if trend.empty:
-        st.warning("No data for selected filters.")
-    else:
-        fig_t = px.line(trend, x="day", y=ycol, markers=True)
-        st.plotly_chart(fig_t, use_container_width=True)
+    fig = px.line(
+        trend,
+        x="day",
+        y=metric_map[metric],
+        markers=True
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
 with tab3:
-    st.subheader("Filtered Records (Latest 500)")
+    st.subheader("Latest 500 Records")
     detail = run_query(DETAIL_SQL, params)
     st.dataframe(detail, use_container_width=True)
 
-    if not detail.empty:
-        st.download_button(
-            "Download CSV",
-            data=detail.to_csv(index=False).encode("utf-8"),
-            file_name="filtered_collisions.csv",
-            mime="text/csv",
-        )
+    st.download_button(
+        "Download CSV",
+        detail.to_csv(index=False),
+        "filtered_collisions.csv",
+        "text/csv"
+    )
