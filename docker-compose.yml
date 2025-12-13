@@ -1,4 +1,4 @@
-version: '3.9'
+version: "3.9"
 
 services:
   db:
@@ -12,8 +12,39 @@ services:
     ports:
       - "5433:5432"
     volumes:
-      - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql
+      - ./schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d collisions"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  ingest:
+    build: .
+    container_name: collisions_ingest
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_URL: postgresql+psycopg2://postgres:postgres@db:5432/collisions
+    command: >
+      bash -lc "python ingest_data.py"
+    volumes:
+      - .:/app
+    restart: "no"
+
+  app:
+    build: .
+    container_name: collisions_app
+    depends_on:
+      - db
+    environment:
+      DB_URL: postgresql+psycopg2://postgres:postgres@db:5432/collisions
+    ports:
+      - "8501:8501"
+    volumes:
+      - .:/app
 
 volumes:
   postgres_data:
