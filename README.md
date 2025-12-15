@@ -203,4 +203,101 @@ CREATE INDEX idx_collisions_date_borough
     ON collisions (crash_date, borough_id);
 
 
+# Vehicle Crash Analytics (Phase 3 — Interactive Dashboard)
+
+This phase delivers an end-to-end interactive analytics dashboard built using **Streamlit**, backed by the PostgreSQL OLTP database running in Docker.
+
+The dashboard allows users to explore NYC motor vehicle collision data through filters, KPIs, charts, trends, and downloadable tables.
+
+------------------------------------------------------------
+
+## Phase 3 Features
+
+### Overview Tab
+- Total crashes
+- Total injured
+- Total killed
+- Crashes by borough (bar chart)
+
+### Top Contributing Factors
+- Displays top N contributing crash factors
+- Fully filterable by date range and borough
+
+### Trends Tab
+- Time-series trends by day
+- Metrics include:
+  - Crashes
+  - Persons Injured
+  - Persons Killed
+  - Pedestrians / Cyclists / Motorists Injured
+
+### Data Tab
+- Displays latest filtered collision records
+- CSV download functionality supported
+
+------------------------------------------------------------
+
+## Running the Project (Docker)
+
+### Prerequisites
+- Docker Desktop installed and running
+- Git installed
+
+### Steps to Run
+
+```bash
+git clone https://github.com/Nirwade/vehicle-crash-analytics-oltp.git
+cd vehicle-crash-analytics-oltp
+docker compose up -d --build
+
+# Phase 3 — Application Layer (Interactive Dashboard)
+
+This phase delivers a complete, user-facing analytics application built using **Streamlit**, connected to the PostgreSQL OLTP database developed in Phases 1 and 2.  
+The application is fully containerized using Docker and runs end-to-end via `docker-compose`.
+
+------------------------------------------------------------
+
+## 1. Application Overview
+
+**Technology Stack**
+- Streamlit — Interactive dashboard
+- PostgreSQL — OLTP database
+- SQLAlchemy — Database connectivity
+- Docker & Docker Compose — Deployment
+
+**Key Features**
+- KPI metrics (Total Crashes, Injured, Killed)
+- Interactive date range filtering
+- Borough-level crash analysis
+- Top contributing factors visualization
+- Time-series trend analysis
+- Filtered data table with CSV download
+
+------------------------------------------------------------
+
+## 2. End-to-End Execution Flow
+
+The project runs fully end-to-end using Docker:
+
+1. PostgreSQL container starts
+2. Database schema is created
+3. ETL pipeline ingests collision data
+4. Streamlit dashboard launches automatically
+
+All components are orchestrated via `docker-compose.yml`.
+
+------------------------------------------------------------
+
+## 3. Running the Project (Docker)
+
+### Prerequisites
+- Docker Desktop installed and running
+- Git installed
+
+### Steps to Run
+
+```bash
+git clone https://github.com/Nirwade/vehicle-crash-analytics-oltp.git
+cd vehicle-crash-analytics-oltp
+docker compose up --build
 
