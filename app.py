@@ -14,40 +14,35 @@ st.set_page_config(
 )
 
 st.title("🚗 NYC Vehicle Crash Analytics")
-st.caption("Phase 3 Streamlit Dashboard — Neon PostgreSQL + Streamlit Cloud")
+st.caption("Phase 3 Streamlit Dashboard — Docker + PostgreSQL (OLTP)")
 
 # ---------------- DATABASE ----------------
 @st.cache_resource
 def get_engine():
-    db_url = None
+    """
+    Works in:
+    - Docker (DB_URL passed via docker-compose environment)
+    - Local machine (fallback to localhost:5433)
+    - Streamlit Cloud (optional: DB_URL in st.secrets)
+    """
+    db_url = os.getenv("DB_URL")
 
-    # 1️⃣ Streamlit Cloud secrets
-    if "DB_URL" in st.secrets:
-        db_url = st.secrets["DB_URL"]
-
-    # 2️⃣ Local fallback
+    # Try Streamlit secrets only if present; if secrets file doesn't exist, ignore
     if not db_url:
-        db_url = os.getenv("DB_URL")
+        try:
+            db_url = st.secrets.get("DB_URL", None)
+        except Exception:
+            db_url = None
 
+    # Local fallback
     if not db_url:
-        st.error(
-            "❌ DB_URL not found.\n\n"
-            "Add it in **Streamlit → App Settings → Secrets** as:\n"
-            "`DB_URL = 'postgresql://...'`"
-        )
-        st.stop()
+        db_url = "postgresql+psycopg2://postgres:postgres@127.0.0.1:5433/collisions"
 
     try:
-        engine = create_engine(
-            db_url,
-            pool_pre_ping=True,
-            connect_args={"sslmode": "require"},
-        )
-        # test connection
+        engine = create_engine(db_url, pool_pre_ping=True)
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
         return engine
-
     except SQLAlchemyError as e:
         st.error("❌ Database connection failed")
         st.code(str(e))
@@ -60,24 +55,42 @@ def run_query(sql, params=None):
     with engine.connect() as conn:
         return pd.read_sql(text(sql), conn, params=params or {})
 
-
 # ---------------- SIDEBAR FILTERS ----------------
 st.sidebar.header("🔎 Filters")
 
-end_date = st.sidebar.date_input("End date", value=date.today())
-start_date = st.sidebar.date_input(
-    "Start date", value=end_date - timedelta(days=30)
-)
-
-# Borough list
-boroughs_df = run_query("""
-    SELECT DISTINCT borough
-    FROM public.collisions
-    WHERE borough IS NOT NULL AND borough <> ''
-    ORDER BY borough;
+# --- Date bounds from DB  ---
+date_bounds = run_query("""
+    SELECT MIN(crash_date) AS min_date, MAX(crash_date) AS max_date
+    FROM public.collisions;
 """)
 
-boroughs = ["All"] + boroughs_df["borough"].tolist()
+min_dt = pd.to_datetime(date_bounds.loc[0, "min_date"]).date()
+max_dt = pd.to_datetime(date_bounds.loc[0, "max_date"]).date()
+
+end_date = st.sidebar.date_input(
+    "End date",
+    value=max_dt,
+    min_value=min_dt,
+    max_value=max_dt
+)
+
+default_start = max(min_dt, end_date - timedelta(days=30))
+
+start_date = st.sidebar.date_input(
+    "Start date",
+    value=default_start,
+    min_value=min_dt,
+    max_value=end_date
+)
+
+# Borough list 
+boroughs_df = run_query("""
+    SELECT borough_name AS borough
+    FROM public.boroughs
+    ORDER BY borough_name;
+""")
+
+boroughs = ["All"] + boroughs_df["borough"].dropna().tolist()
 borough = st.sidebar.selectbox("Borough", boroughs)
 
 metric = st.sidebar.selectbox(
@@ -92,7 +105,7 @@ metric = st.sidebar.selectbox(
     ],
 )
 
-top_n = st.sidebar.slider("Top N", 5, 20, 10)
+top_n = st.sidebar.slider("Top N (Factors)", 5, 20, 10)
 
 params = {
     "start_date": start_date,
@@ -100,73 +113,85 @@ params = {
     "borough": borough,
 }
 
-# ---------------- SQL QUERIES ----------------
+# ---------------- SQL QUERIES (MATCHES YOUR OLTP SCHEMA) ----------------
 KPI_SQL = """
 SELECT
   COUNT(*) AS total_crashes,
-  COALESCE(SUM(number_of_persons_injured), 0) AS total_injured,
-  COALESCE(SUM(number_of_persons_killed), 0) AS total_killed
-FROM public.collisions
-WHERE crash_date BETWEEN :start_date AND :end_date
-  AND (:borough = 'All' OR borough = :borough);
+  COALESCE(SUM(c.number_of_persons_injured), 0) AS total_injured,
+  COALESCE(SUM(c.number_of_persons_killed), 0) AS total_killed
+FROM public.collisions c
+LEFT JOIN public.boroughs b ON c.borough_id = b.borough_id
+WHERE c.crash_date BETWEEN :start_date AND :end_date
+  AND (:borough = 'All' OR b.borough_name = :borough);
 """
 
 TREND_SQL = """
 SELECT
-  crash_date::date AS day,
+  c.crash_date::date AS day,
   COUNT(*) AS crashes,
-  COALESCE(SUM(number_of_persons_injured), 0) AS persons_injured,
-  COALESCE(SUM(number_of_persons_killed), 0) AS persons_killed,
-  COALESCE(SUM(number_of_pedestrians_injured), 0) AS pedestrians_injured,
-  COALESCE(SUM(number_of_cyclist_injured), 0) AS cyclists_injured,
-  COALESCE(SUM(number_of_motorist_injured), 0) AS motorists_injured
-FROM public.collisions
-WHERE crash_date BETWEEN :start_date AND :end_date
-  AND (:borough = 'All' OR borough = :borough)
+  COALESCE(SUM(c.number_of_persons_injured), 0) AS persons_injured,
+  COALESCE(SUM(c.number_of_persons_killed), 0) AS persons_killed,
+  COALESCE(SUM(c.number_of_pedestrians_injured), 0) AS pedestrians_injured,
+  COALESCE(SUM(c.number_of_cyclist_injured), 0) AS cyclists_injured,
+  COALESCE(SUM(c.number_of_motorist_injured), 0) AS motorists_injured
+FROM public.collisions c
+LEFT JOIN public.boroughs b ON c.borough_id = b.borough_id
+WHERE c.crash_date BETWEEN :start_date AND :end_date
+  AND (:borough = 'All' OR b.borough_name = :borough)
 GROUP BY day
 ORDER BY day;
 """
 
 BY_BOROUGH_SQL = """
 SELECT
-  COALESCE(NULLIF(borough,''), 'UNKNOWN') AS borough,
+  COALESCE(b.borough_name, 'UNKNOWN') AS borough,
   COUNT(*) AS crashes
-FROM public.collisions
-WHERE crash_date BETWEEN :start_date AND :end_date
-GROUP BY COALESCE(NULLIF(borough,''), 'UNKNOWN')
+FROM public.collisions c
+LEFT JOIN public.boroughs b ON c.borough_id = b.borough_id
+WHERE c.crash_date BETWEEN :start_date AND :end_date
+GROUP BY COALESCE(b.borough_name, 'UNKNOWN')
+HAVING COALESCE(b.borough_name, 'UNKNOWN') <> 'UNKNOWN'
 ORDER BY crashes DESC;
 """
 
 TOP_FACTORS_SQL = """
-SELECT factor, COUNT(*) AS crashes
-FROM (
-  SELECT contributing_factor_vehicle_1 AS factor
-  FROM public.collisions
-  WHERE crash_date BETWEEN :start_date AND :end_date
-    AND (:borough = 'All' OR borough = :borough)
-    AND contributing_factor_vehicle_1 IS NOT NULL
-    AND contributing_factor_vehicle_1 <> ''
-    AND contributing_factor_vehicle_1 <> 'Unspecified'
-) t
-GROUP BY factor
+SELECT
+  f.factor_desc AS factor,
+  COUNT(*) AS crashes
+FROM public.collision_factors cf
+JOIN public.factors f
+  ON cf.factor_id = f.factor_id
+JOIN public.collisions c
+  ON cf.collision_id = c.collision_id
+LEFT JOIN public.boroughs b
+  ON c.borough_id = b.borough_id
+WHERE c.crash_date BETWEEN :start_date AND :end_date
+  AND (:borough = 'All' OR b.borough_name = :borough)
+GROUP BY f.factor_desc
 ORDER BY crashes DESC
 LIMIT :top_n;
 """
 
 DETAIL_SQL = """
 SELECT
-  crash_date, crash_time, borough, zip_code,
-  on_street_name, cross_street_name, off_street_name,
-  number_of_persons_injured, number_of_persons_killed,
-  number_of_pedestrians_injured, number_of_cyclist_injured,
-  number_of_motorist_injured,
-  contributing_factor_vehicle_1,
-  vehicle_type_code1,
-  collision_id
-FROM public.collisions
-WHERE crash_date BETWEEN :start_date AND :end_date
-  AND (:borough = 'All' OR borough = :borough)
-ORDER BY crash_date DESC, crash_time DESC
+  c.collision_id,
+  c.crash_date,
+  c.crash_time,
+  b.borough_name AS borough,
+  c.zip_code,
+  c.on_street_name,
+  c.cross_street_name,
+  c.off_street_name,
+  c.number_of_persons_injured,
+  c.number_of_persons_killed,
+  c.number_of_pedestrians_injured,
+  c.number_of_cyclist_injured,
+  c.number_of_motorist_injured
+FROM public.collisions c
+LEFT JOIN public.boroughs b ON c.borough_id = b.borough_id
+WHERE c.crash_date BETWEEN :start_date AND :end_date
+  AND (:borough = 'All' OR b.borough_name = :borough)
+ORDER BY c.crash_date DESC, c.crash_time DESC
 LIMIT 500;
 """
 
@@ -184,10 +209,7 @@ with tab1:
 
     st.subheader("Crashes by Borough")
     by_b = run_query(BY_BOROUGH_SQL, params)
-    st.plotly_chart(
-        px.bar(by_b, x="borough", y="crashes"),
-        use_container_width=True
-    )
+    st.plotly_chart(px.bar(by_b, x="borough", y="crashes"), use_container_width=True)
 
     st.subheader(f"Top {top_n} Contributing Factors")
     factors = run_query(TOP_FACTORS_SQL, {**params, "top_n": top_n})
@@ -209,16 +231,11 @@ with tab2:
         "Motorists Injured": "motorists_injured",
     }
 
-    fig = px.line(
-        trend,
-        x="day",
-        y=metric_map[metric],
-        markers=True
-    )
+    fig = px.line(trend, x="day", y=metric_map[metric], markers=True)
     st.plotly_chart(fig, use_container_width=True)
 
 with tab3:
-    st.subheader("Latest 500 Records")
+    st.subheader("Latest 500 Records (Filtered)")
     detail = run_query(DETAIL_SQL, params)
     st.dataframe(detail, use_container_width=True)
 
